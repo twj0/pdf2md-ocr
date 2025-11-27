@@ -1,0 +1,29 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test files
+*.pdf
+*.md
+!README.md
+
+# PDFium
+pdfium.dll
+libpdfium.so
+libpdfium.dylib
+
+# Release package (build output)
+/release_package/
