@@ -1,17 +1,20 @@
+use crate::cache::CacheManager;
+use crate::config::Config;
+use crate::image_processor;
+use crate::ocr_engine::{OcrBlock, OcrEngine, OcrPage};
 use anyhow::{Context, Result};
 use image::{DynamicImage, RgbaImage};
 use indicatif::ProgressBar;
 use pdfium_render::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::config::Config;
-use crate::ocr_engine::OcrEngine;
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PageResult {
     pub page_num: usize,
-    pub text: String,
+    pub blocks: Vec<OcrBlock>,
+    pub detected_language: Option<String>,
     pub image_width: u32,
     pub image_height: u32,
 }
@@ -25,12 +28,11 @@ pub struct PdfProcessor {
 impl PdfProcessor {
     pub fn new<P: AsRef<Path>>(pdf_path: P, dpi: u32) -> Result<Self> {
         let pdf_path = pdf_path.as_ref().to_path_buf();
-        
-        // Load PDF temporarily to get page count
+
         let pdfium = Pdfium::new(
             Pdfium::bind_to_system_library()
                 .or_else(|_| Pdfium::bind_to_library("pdfium"))
-                .context("Failed to load PDFium library. Please ensure PDFium is installed.")?
+                .context("Failed to load PDFium library. Please ensure PDFium is installed.")?,
         );
 
         let document = pdfium
@@ -61,11 +63,10 @@ impl PdfProcessor {
         let errors = Arc::new(Mutex::new(Vec::new()));
         let pdf_path = self.pdf_path.clone();
         let dpi = self.dpi;
+        let cache = CacheManager::new(&config.cache)?;
 
-        // Process pages sequentially since pdfium is not thread-safe by default
-        // and we need to reload the document for each thread anyway
         for &page_num in page_range {
-            match process_single_page(&pdf_path, page_num, dpi, ocr_engine, config) {
+            match process_single_page(&pdf_path, page_num, dpi, ocr_engine, config, &cache) {
                 Ok(result) => {
                     results.lock().unwrap().push(result);
                 }
@@ -97,19 +98,18 @@ fn process_single_page(
     dpi: u32,
     ocr_engine: &OcrEngine,
     config: &Config,
+    cache: &CacheManager,
 ) -> Result<PageResult> {
-    // Load PDF for this page
     let pdfium = Pdfium::new(
         Pdfium::bind_to_system_library()
             .or_else(|_| Pdfium::bind_to_library("pdfium"))
-            .context("Failed to load PDFium library")?
+            .context("Failed to load PDFium library")?,
     );
 
     let document = pdfium
         .load_pdf_from_file(pdf_path, None)
         .context("Failed to load PDF file")?;
 
-    // Render PDF page to image
     let page = document
         .pages()
         .get((page_num - 1) as u16)
@@ -123,26 +123,63 @@ fn process_single_page(
         .render_with_config(&render_config)
         .context(format!("Failed to render page {}", page_num))?;
 
-    // Convert to DynamicImage
     let image = bitmap_to_image(&bitmap)?;
-
-    // Preprocess if enabled
-    let processed_image = if config.preprocess {
-        crate::image_processor::preprocess_image(image)?
+    let raw_bytes = image.to_rgba8().into_raw();
+    let config_fingerprint = format!(
+        "engine:{:?}|langs:{}|preprocess:{}|math:{}|layout:{}|gpu:{}",
+        config.engine, config.languages, config.preprocess, config.math_ocr, config.layout, config.use_gpu
+    );
+    let page_hash = if cache.enabled() {
+        Some(cache.make_hash(
+            pdf_path,
+            page_num,
+            dpi,
+            &config_fingerprint,
+            &raw_bytes,
+        ))
     } else {
-        image
+        None
     };
 
-    // Perform OCR
-    let text = ocr_engine.recognize(&processed_image)
+    if let Some(ref hash) = page_hash {
+        if let Some(cached) = cache.load_page(hash)? {
+            return Ok(cached);
+        }
+    }
+
+    let processed_image = if config.preprocess {
+        if let (Some(hash), true) = (page_hash.as_ref(), cache.enabled()) {
+            if let Some(img) = cache.load_preprocessed(hash)? {
+                img
+            } else {
+                let img = image_processor::preprocess_image(image.clone(), config.use_gpu)?;
+                cache.store_preprocessed(hash, &img)?;
+                img
+            }
+        } else {
+            image_processor::preprocess_image(image.clone(), config.use_gpu)?
+        }
+    } else {
+        image.clone()
+    };
+
+    let ocr_page: OcrPage = ocr_engine
+        .recognize(&processed_image, config)
         .context(format!("OCR failed on page {}", page_num))?;
 
-    Ok(PageResult {
+    let result = PageResult {
         page_num,
-        text,
+        blocks: ocr_page.blocks,
+        detected_language: ocr_page.detected_language,
         image_width: processed_image.width(),
         image_height: processed_image.height(),
-    })
+    };
+
+    if let Some(hash) = page_hash {
+        cache.store_page(&hash, &result)?;
+    }
+
+    Ok(result)
 }
 
 fn bitmap_to_image(bitmap: &PdfBitmap) -> Result<DynamicImage> {
@@ -150,13 +187,12 @@ fn bitmap_to_image(bitmap: &PdfBitmap) -> Result<DynamicImage> {
     let height = bitmap.height() as u32;
     let buffer = bitmap.as_raw_bytes();
 
-    // PDFium returns BGRA format
     let mut rgba_buffer = Vec::with_capacity(buffer.len());
     for chunk in buffer.chunks_exact(4) {
-        rgba_buffer.push(chunk[2]); // R
-        rgba_buffer.push(chunk[1]); // G
-        rgba_buffer.push(chunk[0]); // B
-        rgba_buffer.push(chunk[3]); // A
+        rgba_buffer.push(chunk[2]);
+        rgba_buffer.push(chunk[1]);
+        rgba_buffer.push(chunk[0]);
+        rgba_buffer.push(chunk[3]);
     }
 
     let image = RgbaImage::from_raw(width, height, rgba_buffer)

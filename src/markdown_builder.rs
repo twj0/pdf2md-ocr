@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::Local;
 use std::path::Path;
 
+use crate::ocr_engine::BlockType;
 use crate::pdf_processor::PageResult;
 
 pub struct MarkdownBuilder {
@@ -27,11 +28,20 @@ impl MarkdownBuilder {
         // Add content from each page
         for result in results {
             markdown.push_str(&format!("## Page {}\n\n", result.page_num));
-            
-            // Clean and format the OCR text
-            let cleaned_text = self.clean_ocr_text(&result.text);
-            markdown.push_str(&cleaned_text);
-            markdown.push_str("\n\n");
+
+            for block in &result.blocks {
+                let cleaned_text = self.clean_ocr_text(&block.text);
+                match block.block_type {
+                    BlockType::Formula => {
+                        markdown.push_str(&cleaned_text);
+                        markdown.push_str("\n\n");
+                    }
+                    _ => {
+                        markdown.push_str(&cleaned_text);
+                        markdown.push_str("\n\n");
+                    }
+                }
+            }
         }
 
         Ok(markdown)

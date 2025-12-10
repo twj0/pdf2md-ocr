@@ -1,6 +1,6 @@
 [package]
 name = "rust-ocr2md"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [dependencies]
@@ -13,6 +13,8 @@ imageproc = "0.25"
 
 # OCR
 tesseract-rs = "0.1"
+paddle-ocr-rs = { version = "0.6.1" }
+whatlang = "0.16"
 
 # Parallel processing
 rayon = "1.10"
@@ -30,6 +32,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = "0.4"
 num_cpus = "1.16"
+sha2 = "0.10"
+hex = "0.4"
 
 [profile.release]
 opt-level = 3

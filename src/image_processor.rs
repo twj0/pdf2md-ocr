@@ -2,15 +2,12 @@ use anyhow::Result;
 use image::{DynamicImage, GrayImage, Luma};
 use imageproc::contrast::{threshold, ThresholdType};
 
-/// Preprocess image to improve OCR accuracy
-pub fn preprocess_image(image: DynamicImage) -> Result<DynamicImage> {
-    // Convert to grayscale
+/// Preprocess image to improve OCR accuracy. GPU flag is forwarded for future CUDA/OpenCL hooks.
+pub fn preprocess_image(image: DynamicImage, _use_gpu: bool) -> Result<DynamicImage> {
+    // TODO: route to GPU-accelerated kernels when available
     let gray = image.to_luma8();
 
-    // Apply adaptive thresholding for better text recognition
     let processed = apply_adaptive_threshold(&gray);
-
-    // Apply noise reduction
     let denoised = denoise(&processed);
 
     Ok(DynamicImage::ImageLuma8(denoised))

@@ -4,6 +4,10 @@ mod image_processor;
 mod markdown_builder;
 mod config;
 mod error;
+mod cache;
+mod language;
+mod layout;
+mod math;
 
 use anyhow::Result;
 use clap::Parser;
@@ -12,7 +16,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use std::io::{self, Write};
 
-use crate::config::Config;
+use crate::config::{CacheConfig, Config, EngineKind};
 use crate::pdf_processor::PdfProcessor;
 use crate::ocr_engine::OcrEngine;
 use crate::markdown_builder::MarkdownBuilder;
@@ -40,6 +44,54 @@ struct Cli {
     /// Languages for OCR (default: eng+chi_sim+equ)
     #[arg(short, long, default_value = "eng+chi_sim+equ")]
     languages: String,
+
+    /// OCR backend: tesseract or paddle
+    #[arg(long, value_enum, default_value = "paddle")]
+    engine: EngineKind,
+
+    /// Enable PP-Structure style layout analysis
+    #[arg(long, default_value = "true")]
+    layout: bool,
+
+    /// Enable language detection and dynamic model switch
+    #[arg(long, default_value = "true")]
+    detect_language: bool,
+
+    /// Enable math OCR for formulas
+    #[arg(long, default_value = "true")]
+    math_ocr: bool,
+
+    /// PaddleOCR model directory (det/cls/rec ONNX files)
+    #[arg(long)]
+    paddle_model_dir: Option<PathBuf>,
+
+    /// Optional math model directory (LaTeX-OCR)
+    #[arg(long)]
+    math_model_dir: Option<PathBuf>,
+
+    /// Enable on-disk cache (preprocess + OCR)
+    #[arg(long, default_value = "true")]
+    cache: bool,
+
+    /// Cache preprocessed images
+    #[arg(long, default_value = "true")]
+    cache_preprocess: bool,
+
+    /// Cache OCR results
+    #[arg(long, default_value = "true")]
+    cache_ocr: bool,
+
+    /// Override cache directory
+    #[arg(long)]
+    cache_dir: Option<PathBuf>,
+
+    /// Prefer GPU acceleration (if supported by ONNX Runtime)
+    #[arg(long, default_value = "false")]
+    use_gpu: bool,
+
+    /// Auto-tune pipeline based on document type
+    #[arg(long, default_value = "true")]
+    auto_config: bool,
 
     /// Enable image preprocessing for better accuracy
     #[arg(long, default_value = "true")]
@@ -110,16 +162,31 @@ fn run() -> Result<()> {
     println!("================================================");
 
     // Setup configuration
+    let default_cache_dir = Config::default().cache.dir;
     let config = Config {
         dpi: cli.dpi,
         languages: cli.languages.clone(),
+        detect_language: cli.detect_language,
         preprocess: cli.preprocess,
         threads: cli.threads.unwrap_or_else(num_cpus::get),
+        engine: cli.engine,
+        layout: cli.layout,
+        math_ocr: cli.math_ocr,
+        paddle_model_dir: cli.paddle_model_dir.clone(),
+        math_model_dir: cli.math_model_dir.clone(),
+        cache: CacheConfig {
+            enabled: cli.cache,
+            dir: cli.cache_dir.unwrap_or(default_cache_dir),
+            preprocess: cli.cache_preprocess,
+            ocr: cli.cache_ocr,
+        },
+        use_gpu: cli.use_gpu,
+        auto_config: cli.auto_config,
     };
 
     println!("📄 Input: {}", input_path.display());
-    println!("⚙️  Config: {} DPI, {} threads, Languages: {}", 
-             config.dpi, config.threads, config.languages);
+    println!("⚙️  Config: {} DPI, {} threads, Languages: {}, Engine: {:?}", 
+             config.dpi, config.threads, config.languages, config.engine);
 
     // Initialize components
     let pdf_processor = PdfProcessor::new(&input_path, config.dpi)?;

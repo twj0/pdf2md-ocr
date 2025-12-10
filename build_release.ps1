@@ -3,12 +3,14 @@
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "Building RustOCR2md Release Package" -ForegroundColor Cyan
-Write-Host "===================================" -ForegroundColor Cyan
+Write-Host "Building RustOCR2md Release Package (v0.1.1)" -ForegroundColor Cyan
+Write-Host "=============================================" -ForegroundColor Cyan
 
 $projectDir = $PSScriptRoot
+$version = "0.1.1"
 $releaseDir = Join-Path $projectDir "target\release"
 $packageDir = Join-Path $projectDir "release_package"
+$versionDir = Join-Path $packageDir $version
 
 # Step 1: Download PDFium if not exists
 $pdfiumDll = Join-Path $projectDir "pdfium.dll"
@@ -31,19 +33,28 @@ Pop-Location
 
 # Step 3: Create package directory
 Write-Host "`nStep 3: Creating release package..." -ForegroundColor Yellow
-if (Test-Path $packageDir) {
-    Remove-Item $packageDir -Recurse -Force
+if (Test-Path $versionDir) {
+    Remove-Item $versionDir -Recurse -Force
 }
-New-Item -ItemType Directory -Path $packageDir | Out-Null
+New-Item -ItemType Directory -Path $versionDir | Out-Null
 
 # Step 4: Copy files to package
 $exePath = Join-Path $releaseDir "rust-ocr2md.exe"
-Copy-Item $exePath -Destination $packageDir
-Copy-Item $pdfiumDll -Destination $packageDir
+Copy-Item $exePath -Destination $versionDir
+Copy-Item $pdfiumDll -Destination $versionDir
+
+# Copy PaddleOCR models if present
+$paddleModels = Join-Path $projectDir "models\paddle"
+if (Test-Path $paddleModels) {
+    Write-Host "Copying PaddleOCR models..." -ForegroundColor Green
+    Copy-Item -Path $paddleModels -Destination (Join-Path $versionDir "models") -Recurse
+} else {
+    Write-Host "PaddleOCR models not found at models\paddle (skip copy)" -ForegroundColor Yellow
+}
 
 # Step 5: Create README
 $readmeContent = @"
-# RustOCR2md - PDF to Markdown OCR Tool
+# RustOCR2md v$version - PDF to Markdown OCR Tool
 
 ## Usage
 
@@ -55,18 +66,32 @@ Simply drag a PDF file onto `rust-ocr2md.exe`
 rust-ocr2md.exe <pdf_file>
 rust-ocr2md.exe input.pdf -o output.md
 rust-ocr2md.exe input.pdf --dpi 300 --languages eng+chi_sim
+rust-ocr2md.exe book.pdf --engine paddle --paddle-model-dir models/paddle --detect-language true --math-ocr true
 ```
 
 ### Options
 - `-o, --output`: Output markdown file path
 - `-d, --dpi`: DPI for PDF rendering (default: 300)
 - `-l, --languages`: OCR languages (default: eng+chi_sim+equ)
-- `-t, --threads`: Number of threads
+- `-t, --threads`: Number of threads (Paddle/Tesseract)
+- `--engine`: `paddle` (default) or `tesseract`
+- `--layout`: Enable layout ordering (default: true)
+- `--detect-language`: Auto language detect (default: true)
+- `--math-ocr`: Enable formula detection + OCR (default: true)
+- `--paddle-model-dir`: Path to Paddle ONNX models (det/cls/rec)
+- `--cache`, `--cache-preprocess`, `--cache-ocr`, `--cache-dir`: Enable/adjust caching
+- `--use-gpu`: Prefer GPU for preprocessing (if available)
 - `--pages`: Page range (e.g., 1-10, or "all")
 
 ## Requirements
 
-### Tesseract Language Data
+### PaddleOCR Models
+Place ONNX models under `models/paddle`:
+- ch_PP-OCRv4_det_infer.onnx
+- ch_ppocr_mobile_v2.0_cls_infer.onnx
+- ch_PP-OCRv4_rec_infer.onnx
+
+### Tesseract Language Data (for formulas/lang-detect)
 Download language data files and set `TESSDATA_PREFIX` environment variable:
 
 1. Download from: https://github.com/tesseract-ocr/tessdata
@@ -83,13 +108,14 @@ Or place in default location:
 - `rust-ocr2md.exe` - Main executable
 - `pdfium.dll` - PDF rendering library
 - `README.md` - This file
+- `models/paddle` - PaddleOCR ONNX models (if present when packaging)
 "@
 
-$readmeContent | Out-File -FilePath (Join-Path $packageDir "README.md") -Encoding UTF8
+$readmeContent | Out-File -FilePath (Join-Path $versionDir "README.md") -Encoding UTF8
 
-Write-Host "`nRelease package created at: $packageDir" -ForegroundColor Green
+Write-Host "`nRelease package created at: $versionDir" -ForegroundColor Green
 Write-Host "`nContents:" -ForegroundColor Cyan
-Get-ChildItem $packageDir | ForEach-Object {
+Get-ChildItem $versionDir | ForEach-Object {
     Write-Host "  - $($_.Name) ($([math]::Round($_.Length / 1MB, 2)) MB)"
 }
 
