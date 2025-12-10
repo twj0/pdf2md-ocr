@@ -290,7 +290,15 @@ struct PaddleWrapper {
 
 impl PaddleWrapper {
     fn new(model_dir: Option<PathBuf>, threads: usize) -> Result<Self> {
-        let base_dir = model_dir.unwrap_or_else(|| PathBuf::from("./models/paddle"));
+        let base_dir = model_dir.unwrap_or_else(|| {
+            // Prefer alongside executable to make drag-and-drop work
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join("models")
+                .join("paddle")
+        });
         let det = base_dir.join("ch_PP-OCRv4_det_infer.onnx");
         let cls = base_dir.join("ch_ppocr_mobile_v2.0_cls_infer.onnx");
         let rec = base_dir.join("ch_PP-OCRv4_rec_infer.onnx");

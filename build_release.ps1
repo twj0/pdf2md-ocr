@@ -33,8 +33,16 @@ Pop-Location
 
 # Step 3: Create package directory
 Write-Host "`nStep 3: Creating release package..." -ForegroundColor Yellow
+# Try to stop any running instance to release file locks
+Get-Process -Name "rust-ocr2md" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 200
 if (Test-Path $versionDir) {
-    Remove-Item $versionDir -Recurse -Force
+    try {
+        Remove-Item $versionDir -Recurse -Force -ErrorAction Stop
+    } catch {
+        Write-Warning "Failed to remove existing $versionDir (file lock?). Close any running rust-ocr2md.exe and rerun."
+        throw
+    }
 }
 New-Item -ItemType Directory -Path $versionDir | Out-Null
 
@@ -47,9 +55,25 @@ Copy-Item $pdfiumDll -Destination $versionDir
 $paddleModels = Join-Path $projectDir "models\paddle"
 if (Test-Path $paddleModels) {
     Write-Host "Copying PaddleOCR models..." -ForegroundColor Green
-    Copy-Item -Path $paddleModels -Destination (Join-Path $versionDir "models") -Recurse
+    # Ensure destination directory exists
+    $destModelsDir = Join-Path $versionDir "models"
+    if (-not (Test-Path $destModelsDir)) {
+        New-Item -ItemType Directory -Path $destModelsDir | Out-Null
+    }
+    Copy-Item -Path $paddleModels -Destination $destModelsDir -Recurse
 } else {
-    Write-Host "PaddleOCR models not found at models\paddle (skip copy)" -ForegroundColor Yellow
+    # Check if models exist in root/models/paddle path (alternative location)
+    $rootPaddleModels = Join-Path $projectDir "root\models\paddle"
+    if (Test-Path $rootPaddleModels) {
+        Write-Host "Copying PaddleOCR models from root path..." -ForegroundColor Green
+        $destModelsDir = Join-Path $versionDir "models"
+        if (-not (Test-Path $destModelsDir)) {
+            New-Item -ItemType Directory -Path $destModelsDir | Out-Null
+        }
+        Copy-Item -Path $rootPaddleModels -Destination $destModelsDir -Recurse
+    } else {
+        Write-Host "PaddleOCR models not found at models\paddle or root\models\paddle (skip copy)" -ForegroundColor Yellow
+    }
 }
 
 # Step 5: Create README
